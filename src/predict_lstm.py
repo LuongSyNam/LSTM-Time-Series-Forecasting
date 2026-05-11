@@ -12,9 +12,8 @@ AQ_COLS = [
 TIME_COLS = ["hour_sin", "hour_cos", "day_sin", "day_cos", "month_sin", "month_cos"]
 EXTRA_TIME_COLS = ["hour_norm", "day_norm", "month_norm", "is_weekend", "is_business_hour"]
 
-# ==================== THÊM HÀM KIỂM TRA GPU ====================
 def get_device():
-    """Lấy device ưu tiên: GPU (CUDA) > CPU"""
+    """Lấy device ưu tiên: GPU (CUDA) > MPS (Apple Silicon) > CPU"""
     if torch.cuda.is_available():
         device = torch.device("cuda")
         print(f"      🚀 Using GPU: {torch.cuda.get_device_name(0)}")
@@ -27,10 +26,7 @@ def get_device():
     return device
 
 def add_lag_features_for_inference(df: pd.DataFrame, target_col: str, lags: list = None):
-    """
-    THÊM LAG FEATURES - GIỐNG HỆT NHƯ TRONG TRAIN
-    Đây là lý do gây ra lỗi "not in index"
-    """
+    """Thêm lag features cho inference"""
     if lags is None:
         lags = [1, 2, 3, 6, 12, 24, 48, 72]
     
@@ -38,12 +34,10 @@ def add_lag_features_for_inference(df: pd.DataFrame, target_col: str, lags: list
     for lag in lags:
         df[f"{target_col}_lag_{lag}"] = df[target_col].shift(lag)
     
-    # Rolling statistics
     for window in [6, 12, 24]:
         df[f"{target_col}_rolling_mean_{window}"] = df[target_col].rolling(window).mean()
         df[f"{target_col}_rolling_std_{window}"] = df[target_col].rolling(window).std()
     
-    # Drop NaN rows để có dữ liệu sạch
     df = df.dropna().reset_index(drop=True)
     return df
 
@@ -97,7 +91,7 @@ class ImprovedLSTMForecaster(nn.Module):
     def __init__(
         self,
         input_size: int,
-        hidden_size: int = 192,
+        hidden_size: int = 128,
         num_layers: int = 2,
         dropout: float = 0.2,
         horizon: int = 24,
@@ -158,7 +152,7 @@ class ImprovedLSTMForecaster(nn.Module):
         return out
 
 def build_advanced_time_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Thêm time features - GIỐNG HỆT NHƯ TRONG TRAIN"""
+    """Thêm time features"""
     df = df.copy()
     ts = pd.to_datetime(df["Time"], utc=True)
     
@@ -195,29 +189,30 @@ def build_last_window(
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", default="outputs/best_lstm.pt")
+    ap.add_argument("--ckpt", default="best_lstm.pt", help="Path to checkpoint (relative to outdir)")
     ap.add_argument("--input", default="data/air_quality.csv")
     ap.add_argument("--location", default="khanhhoa_nhatrang")
-    ap.add_argument("--out", default="outputs/predictions.csv")
+    ap.add_argument("--out", default="predictions.csv")
     ap.add_argument("--outdir", type=str, default="outputs")
     ap.add_argument("--value_column", type=str, default="aqi")
-    ap.add_argument("--device", type=str, default=None, help="cuda, cpu, hoặc auto (mặc định)")
     
     args = ap.parse_args()
 
-    # ==================== KIỂM TRA DEVICE ====================
-    if args.device:
-        device = torch.device(args.device)
-        print(f"      Using device: {device} (forced)")
-    else:
-        device = get_device()
-    
+    device = get_device()
+
     # ── [1/4] Loading checkpoint ──────────────────────────────────
-    if not os.path.exists(args.ckpt):
-        print(f"[ERROR] Checkpoint không tồn tại: {args.ckpt}")
-        return
+    # SỬA: Tìm checkpoint trong outdir
+    ckpt_path = os.path.join(args.outdir, args.ckpt)
+    if not os.path.exists(ckpt_path):
+        # Thử tìm best_lstm.pt nếu không thấy
+        alt_path = os.path.join(args.outdir, "best_lstm.pt")
+        if os.path.exists(alt_path):
+            ckpt_path = alt_path
+        else:
+            print(f"[ERROR] Checkpoint không tồn tại: {ckpt_path}")
+            return
     
-    ckpt = torch.load(args.ckpt, map_location="cpu")
+    ckpt = torch.load(ckpt_path, map_location="cpu")
     lookback = ckpt["lookback"]
     horizon = ckpt["horizon"]
     feat_cols = ckpt["feat_cols"]
@@ -227,7 +222,7 @@ def main():
     num_layers = ckpt["num_layers"]
     embed_dim = ckpt.get("embed_dim", 16)
 
-    print(f"[1/4] Loading checkpoint: {args.ckpt}")
+    print(f"[1/4] Loading checkpoint: {ckpt_path}")
     print(f"      lookback={lookback}  horizon={horizon}")
     print(f"      features={len(feat_cols)}  target_idx={target_idx}")
 
@@ -241,8 +236,6 @@ def main():
         embed_dim=embed_dim,
     )
     model.load_state_dict(ckpt["model_state"])
-    
-    # ==================== ĐƯA MODEL LÊN GPU ====================
     model = model.to(device)
     model.eval()
     
@@ -254,11 +247,9 @@ def main():
     df = pd.read_csv(args.input, parse_dates=["Time"])
     df = build_advanced_time_features(df)
     
-    # ⚠️ QUAN TRỌNG: Thêm lag features cho dữ liệu test
     print(f"      Adding lag features for target '{args.value_column}'...")
     df = add_lag_features_for_inference(df, args.value_column)
     
-    # Xác định các location cần predict
     if args.location:
         all_locs = [args.location]
     else:
@@ -271,7 +262,7 @@ def main():
     single_location = num_locations == 0
     
     if single_location:
-        scaler_path = os.path.join(os.path.dirname(args.ckpt), "scaler.pkl")
+        scaler_path = os.path.join(args.outdir, "scaler.pkl")
         if not os.path.exists(scaler_path):
             print(f"[ERROR] Không tìm thấy scaler: {scaler_path}")
             return
@@ -284,7 +275,7 @@ def main():
         print(f"      Loaded scaler for single location")
         
     else:
-        scaler_path = os.path.join(os.path.dirname(args.ckpt), "scalers.pkl")
+        scaler_path = os.path.join(args.outdir, "scalers.pkl")
         if not os.path.exists(scaler_path):
             print(f"[ERROR] Không tìm thấy scalers: {scaler_path}")
             return
@@ -303,7 +294,6 @@ def main():
     for loc in all_locs:
         sub = df[df["location_key"] == loc].copy()
         
-        # Kiểm tra xem có đủ features không
         missing_feats = [f for f in feat_cols if f not in sub.columns]
         if missing_feats:
             print(f"  [Skip] {loc}: thiếu {len(missing_feats)} features: {missing_feats[:5]}")
@@ -322,7 +312,6 @@ def main():
         
         try:
             window = build_last_window(sub, sc, lookback, feat_cols, target_idx)
-            # ==================== ĐƯA DATA LÊN GPU ====================
             X_t = torch.tensor(window, dtype=torch.float32).to(device)
             
             l_t = None
@@ -333,7 +322,7 @@ def main():
                 l_t = torch.tensor([loc2idx[loc]]).to(device)
             
             with torch.no_grad():
-                pred_scaled = model(X_t, l_t).cpu().numpy()[0]  # Đưa về CPU sau predict
+                pred_scaled = model(X_t, l_t).cpu().numpy()[0]
             
             n_features = len(feat_cols)
             dummy = np.zeros((horizon, n_features), dtype="float32")
@@ -360,9 +349,10 @@ def main():
             continue
 
     if all_preds:
+        out_path = os.path.join(args.outdir, args.out)
         out_df = pd.DataFrame(all_preds)
-        out_df.to_csv(args.out, index=False)
-        print(f"\n[OK] Saved {len(out_df)} predictions to {args.out}")
+        out_df.to_csv(out_path, index=False)
+        print(f"\n[OK] Saved {len(out_df)} predictions to {out_path}")
         print("\n📊 24-hour forecast:")
         for i, pred in enumerate(all_preds[:24]):
             print(f"  Hour +{pred['hour_ahead']:2d}: {pred['predicted_value']:.2f}")
