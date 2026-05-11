@@ -1,0 +1,17 @@
+{
+  "val_norm_mae": 0.15609456598758698,
+  "val_norm_mse": 0.04869028553366661,
+  "val_norm_rmse": 0.22065874934196472,
+  "val_norm_mape": 0.9813392162322998,
+  "val_norm_r2": 0.9492500424385071,
+  "test_norm_mae": 0.1568790227174759,
+  "test_norm_mse": 0.04939362034201622,
+  "test_norm_rmse": 0.22224675118923187,
+  "test_norm_mape": 0.9932576417922974,
+  "test_norm_r2": 0.9514495134353638,
+  "best_epoch": 20,
+  "device": "cuda",
+  "final_gap": -0.014225814703273193,
+  "max_gap": -0.013647088820360288,
+  "overfitting_epochs": 0
+}
