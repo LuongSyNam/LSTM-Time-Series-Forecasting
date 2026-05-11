@@ -1,6 +1,6 @@
 import argparse, sys, os
 from datetime import datetime
-from src.train_lstm   import main as run_train
+from src.train_lstm import main as run_train
 from src.predict_lstm import main as run_predict
 
 
@@ -11,30 +11,45 @@ def parse_args():
     )
 
     # ── Shared ────────────────────────────────────────────────────
-    ap.add_argument("--input",        required=True,  help="CSV dữ liệu đầu vào")
-    ap.add_argument("--outdir",       default="outputs", help="Thư mục gốc chứa kết quả")
-    ap.add_argument("--value_column", default="aqi",  help="Tên cột target")
-    ap.add_argument("--location",     default=None,   help="1 tỉnh (single-location)")
-    ap.add_argument("--locations",    nargs="+", default=None,
+    ap.add_argument("--input", required=True, help="CSV dữ liệu đầu vào")
+    ap.add_argument("--outdir", default="outputs", help="Thư mục gốc chứa kết quả")
+    ap.add_argument("--value_column", default="aqi", help="Tên cột target")
+    ap.add_argument("--location", default=None, help="1 tỉnh (single-location)")
+    ap.add_argument("--locations", nargs="+", default=None,
                     help="Một số tỉnh chọn lọc (multi-location)")
-    ap.add_argument("--run_name",     default=None,   help="Tên riêng cho lần chạy (nếu không sẽ tự động tạo timestamp)")
+    ap.add_argument("--run_name", default=None, 
+                    help="Tên riêng cho lần chạy (nếu không sẽ tự động tạo timestamp)")
 
     # ── Train ─────────────────────────────────────────────────────
-    ap.add_argument("--lookback",    type=int,   default=72,
+    ap.add_argument("--lookback", type=int, default=96,
                     help="Số giờ nhìn lại (nên >= 2×horizon)")
-    ap.add_argument("--horizon",     type=int,   default=24,
+    ap.add_argument("--horizon", type=int, default=24,
                     help="Số giờ dự báo trực tiếp")
-    ap.add_argument("--hidden_size", type=int,   default=128)
-    ap.add_argument("--num_layers",  type=int,   default=2)
-    ap.add_argument("--embed_dim",   type=int,   default=16)
-    ap.add_argument("--epochs",      type=int,   default=20)
-    ap.add_argument("--batch-size",  type=int,   default=128)
-    ap.add_argument("--lr",          type=float, default=1e-3)
-    ap.add_argument("--loss",        default="huber", help="huber | mse | combined")
-    ap.add_argument("--seed",        type=int,   default=42)
+    ap.add_argument("--hidden_size", type=int, default=128,
+                    help="Kích thước hidden state của LSTM")
+    ap.add_argument("--num_layers", type=int, default=2,
+                    help="Số lớp LSTM")
+    ap.add_argument("--embed_dim", type=int, default=16,
+                    help="Kích thước embedding cho location")
+    ap.add_argument("--epochs", type=int, default=20,
+                    help="Số epoch training")
+    ap.add_argument("--batch-size", type=int, default=128,
+                    help="Batch size")
+    ap.add_argument("--lr", type=float, default=1e-3,
+                    help="Learning rate")
+    ap.add_argument("--loss", default="huber", choices=["huber", "mse", "combined"],
+                    help="Loại loss function")
+    ap.add_argument("--seed", type=int, default=42,
+                    help="Random seed")
+    ap.add_argument("--num_workers", type=int, default=0,
+                    help="Số worker cho DataLoader (tăng nếu có CPU mạnh)")
+    ap.add_argument("--early_stop_patience", type=int, default=10,
+                    help="Số epoch chờ nếu val_loss không cải thiện")
+    ap.add_argument("--overfit_threshold", type=float, default=0.05,
+                    help="Ngưỡng gap (val_loss - train_loss) để phát hiện overfitting")
 
     # ── Predict ───────────────────────────────────────────────────
-    ap.add_argument("--output_csv",  default=None,
+    ap.add_argument("--output_csv", default=None,
                     help="Đường dẫn CSV kết quả (mặc định: <run_dir>/predictions.csv)")
 
     return ap.parse_args()
@@ -49,25 +64,30 @@ def create_run_directory(base_outdir: str, run_name: str = None) -> str:
     run_dir = os.path.join(base_outdir, run_name)
     os.makedirs(run_dir, exist_ok=True)
     
+    # Lưu thông tin cấu hình của lần chạy
     print(f"📁 Creating run directory: {run_dir}")
     return run_dir
 
 
 def build_train_argv(args, run_dir: str) -> list[str]:
+    """Xây dựng arguments cho train_lstm.py"""
     argv = [
-        "--input",        args.input,
-        "--outdir",       run_dir,
+        "--input", args.input,
+        "--outdir", run_dir,
         "--value_column", args.value_column,
-        "--lookback",     str(args.lookback),
-        "--horizon",      str(args.horizon),
-        "--hidden_size",  str(args.hidden_size),
-        "--num_layers",   str(args.num_layers),
-        "--embed_dim",    str(args.embed_dim),
-        "--epochs",       str(args.epochs),
-        "--batch-size",   str(args.batch_size),
-        "--lr",           str(args.lr),
-        "--loss",         args.loss,
-        "--seed",         str(args.seed),
+        "--lookback", str(args.lookback),
+        "--horizon", str(args.horizon),
+        "--hidden_size", str(args.hidden_size),
+        "--num_layers", str(args.num_layers),
+        "--embed_dim", str(args.embed_dim),
+        "--epochs", str(args.epochs),
+        "--batch-size", str(args.batch_size),
+        "--lr", str(args.lr),
+        "--loss", args.loss,
+        "--seed", str(args.seed),
+        "--num_workers", str(args.num_workers),
+        "--early_stop_patience", str(args.early_stop_patience),
+        "--overfit_threshold", str(args.overfit_threshold),
     ]
     if args.location:
         argv += ["--location", args.location]
@@ -77,13 +97,14 @@ def build_train_argv(args, run_dir: str) -> list[str]:
 
 
 def build_predict_argv(args, run_dir: str) -> list[str]:
+    """Xây dựng arguments cho predict_lstm.py"""
     output_csv = args.output_csv if args.output_csv else "predictions.csv"
     
     argv = [
-        "--input",        args.input,
-        "--outdir",       run_dir,
+        "--input", args.input,
+        "--outdir", run_dir,
         "--value_column", args.value_column,
-        "--out",          output_csv,
+        "--out", output_csv,
     ]
     if args.location:
         argv += ["--location", args.location]
@@ -100,6 +121,7 @@ def main():
     print("=" * 60)
     print(f"  RUN: {run_name}")
     print(f"  OUTPUT DIR: {run_dir}")
+    print(f"  CONFIG: lookback={args.lookback}, hidden={args.hidden_size}, batch={args.batch_size}")
     print("=" * 60)
     
     # ========== STEP 1: TRAINING ==========
@@ -121,7 +143,7 @@ def main():
     print("  PIPELINE HOÀN THÀNH")
     print(f"  Run name: {run_name}")
     print(f"  Output → {run_dir}/")
-    print(f"  best_lstm.pt | metrics.json | predictions.csv | training_history.csv")
+    print(f"  📁 best_lstm.pt | metrics.json | predictions.csv | training_history.csv")
     print("=" * 60)
 
 
