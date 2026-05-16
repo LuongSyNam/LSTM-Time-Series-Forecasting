@@ -1,7 +1,7 @@
 import argparse, os, pickle
 import pandas as pd, numpy as np
 import torch
-from src.shared import (
+from src.model import (
     get_device, build_advanced_time_features, add_lag_features,
     ImprovedLSTMForecaster, build_last_window, get_feature_columns
 )

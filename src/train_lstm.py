@@ -6,7 +6,8 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from src.utils import rmse, mae, mse, mape, R2
-from src.shared import (
+torch.cuda.empty_cache()  # Giải phóng bộ nhớ cache
+from src.model import (
     get_device, build_advanced_time_features, add_lag_features,
     ImprovedLSTMForecaster, make_windows, OverfittingDetector,
     get_feature_columns, AQ_COLS, TIME_COLS
